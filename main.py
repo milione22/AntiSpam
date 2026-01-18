@@ -16,10 +16,10 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 
 
-print("TOKEN =", os.getenv("TELEGRAM_BOT_TOKEN"))
+print("TOKEN =", os.getenv("BOT_TOKEN"))
 
 
-bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN') , default=DefaultBotProperties(parse_mode=ParseMode.HTML) )
+bot = Bot(token=os.getenv('BOT_TOKEN') , default=DefaultBotProperties(parse_mode=ParseMode.HTML) )
 dp = Dispatcher()
 
 # Храним активные капчи
@@ -151,6 +151,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
