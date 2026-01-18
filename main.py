@@ -16,7 +16,7 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 
 load_dotenv()
-
+print("TOKEN =", os.getenv("TELEGRAM_BOT_TOKEN"))
 
 
 bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN') , default=DefaultBotProperties(parse_mode=ParseMode.HTML) )
@@ -151,5 +151,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
