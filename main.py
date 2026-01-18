@@ -2,6 +2,8 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 from aiogram.client.default import DefaultBotProperties
+from dotenv import load_dotenv
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
@@ -15,10 +17,7 @@ from aiogram.enums import ParseMode
 
 TOKEN = "token"
 
-bot = Bot(
-    token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN') , default=DefaultBotProperties(parse_mode=ParseMode.HTML) )
 dp = Dispatcher()
 
 # Храним активные капчи
@@ -150,3 +149,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
