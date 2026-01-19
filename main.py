@@ -27,26 +27,27 @@ dp = Dispatcher()
 active_captcha = {}
 
 EMOJI_BUTTONS = {
-    "apple": "Yaблоко",
-    "pear": "Грyшa",
-    "banana": "БаHaH",
-    "tomato": "П0мид0p",
-    "car": "MaшиHа",
-    "heart": "Cepдце"
+    "apple":  {"emoji": "🍎", "text": "Yaблоко"},
+    "pear":   {"emoji": "🍐", "text": "Грyшa"},
+    "banana": {"emoji": "🍌", "text": "БаHaH"},
+    "tomato": {"emoji": "🍅", "text": "П0мид0p"},
+    "car":    {"emoji": "🚗", "text": "MaшиHа"},
+    "heart":  {"emoji": "❤️", "text": "Cepдце"},
 }
 
 
 def build_keyboard():
     kb = []
-    for key, text in EMOJI_BUTTONS.items():
+    for key, data in EMOJI_BUTTONS.items():
         kb.append(
             InlineKeyboardButton(
-                text=text,
+                text=data["emoji"],
                 callback_data=f"captcha:{key}"
             )
         )
-    return InlineKeyboardMarkup(inline_keyboard=[kb[i:i+3] for i in range(0, 6, 3)])
-
+    return InlineKeyboardMarkup(
+        inline_keyboard=[kb[i:i+3] for i in range(0, len(kb), 3)]
+    )
 
 @dp.chat_join_request()
 async def on_join_request(req: ChatJoinRequest):
@@ -54,14 +55,14 @@ async def on_join_request(req: ChatJoinRequest):
     chat_id = req.chat.id
 
     correct_key = random.choice(list(EMOJI_BUTTONS.keys()))
-    correct_text = EMOJI_BUTTONS[correct_key]
+    correct_text = EMOJI_BUTTONS[correct_key]["text"]
 
     try:
         msg = await bot.send_message(
-            user.id,
-            f"Для вступления в чат нажмите:\n\n<b>{correct_text}</b>",
-            reply_markup=build_keyboard()
-        )
+    user.id,
+    f"Для вступления в чат нажмите:\n\n<b>{correct_text}</b>",
+    reply_markup=build_keyboard()
+)
     except Exception:
         # ЛС закрыты → сразу отклоняем
         await bot.decline_chat_join_request(chat_id, user.id)
@@ -151,6 +152,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
 
