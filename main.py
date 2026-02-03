@@ -1,4 +1,5 @@
 import random
+import os
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -15,7 +16,7 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 
 # 🔐 ID администраторов бота
-ADMIN_IDS = {123456789, 987654321}
+ADMIN_IDS = {7996717371, 8561438704}
 
 # 🧠 Хранилища
 pending_captcha = {}      # user_id -> {chat_id, fruit}
@@ -175,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
