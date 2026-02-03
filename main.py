@@ -9,8 +9,6 @@ from telegram.ext import (
     ChatJoinRequestHandler,
 )
 
-# ================== НАСТРОЙКИ ==================
-
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN не задан")
@@ -26,8 +24,19 @@ FRUITS = {
     "Apбуз": "🍉",
 }
 
-pending_captcha = {}      # user_id -> {chat_id, fruit}
-admin_notifications = {}  # admin_id -> bool
+pending_captcha = {}
+admin_notifications = {}
+
+# ================== UI ==================
+
+def admin_keyboard(admin_id):
+    state = admin_notifications.get(admin_id, True)
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            f"🔔 Уведомления: {'ВКЛ' if state else 'ВЫКЛ'}",
+            callback_data="toggle_notify"
+        )
+    ]])
 
 # ================== АДМИН ПАНЕЛЬ ==================
 
@@ -35,18 +44,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id in ADMIN_IDS:
-        state = admin_notifications.get(user_id, True)
-
-        keyboard = [[
-            InlineKeyboardButton(
-                f"🔔 Уведомления: {'ВКЛ' if state else 'ВЫКЛ'}",
-                callback_data="toggle_notify"
-            )
-        ]]
-
         await update.message.reply_text(
             "🔧 Панель администратора",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=admin_keyboard(user_id)
         )
     else:
         await update.message.reply_text("Привет.")
@@ -59,38 +59,28 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if admin_id not in ADMIN_IDS:
         return
 
-    current = admin_notifications.get(admin_id, True)
-    admin_notifications[admin_id] = not current
-    state = admin_notifications[admin_id]
+    admin_notifications[admin_id] = not admin_notifications.get(admin_id, True)
 
-    keyboard = [[
-        InlineKeyboardButton(
-            f"🔔 Уведомления: {'ВКЛ' if state else 'ВЫКЛ'}",
-            callback_data="toggle_notify"
-        )
-    ]]
-
-    await query.edit_message_reply_markup(
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "🔧 Панель администратора",
+        reply_markup=admin_keyboard(admin_id)
     )
 
-# ================== ЗАЯВКА ==================
+# ================== JOIN REQUEST ==================
 
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req = update.chat_join_request
     user = req.from_user
-    chat_id = req.chat.id
 
     fruit = random.choice(list(FRUITS.keys()))
 
-    # Кнопки со ВСЕМИ фруктами
     keyboard = [
         [InlineKeyboardButton(emoji, callback_data=f"captcha:{name}")]
         for name, emoji in FRUITS.items()
     ]
 
     pending_captcha[user.id] = {
-        "chat_id": chat_id,
+        "chat_id": req.chat.id,
         "fruit": fruit
     }
 
@@ -103,42 +93,53 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     except:
         await req.decline()
 
-# ================== КАПЧА ==================
+# ================== CAPTCHA ==================
 
 async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
+    user = query.from_user
+    user_id = user.id
 
     if user_id not in pending_captcha:
         return
 
     data = pending_captcha[user_id]
-    correct_fruit = data["fruit"]
+    correct = data["fruit"]
     chat_id = data["chat_id"]
 
-    chosen_fruit = query.data.split(":")[1]
+    chosen = query.data.split(":")[1]
 
-    if chosen_fruit == correct_fruit:
+    if chosen == correct:
         await query.edit_message_text("✅ Капча пройдена. Ожидайте решения администраторов.")
+
+        username = f"@{user.username}" if user.username else "без username"
+
+        text = (
+            f"🟢 ПРОЙДЕНА КАПЧА\n"
+            f"Имя: {user.full_name}\n"
+            f"Username: {username}\n"
+            f"ID: {user.id}"
+        )
 
         for admin in ADMIN_IDS:
             if admin_notifications.get(admin, True):
                 try:
-                    await context.bot.send_message(
-                        admin,
-                        f"🟢 {query.from_user.full_name} прошел капчу."
-                    )
+                    await context.bot.send_message(admin, text)
                 except:
                     pass
     else:
-        await context.bot.send_message(user_id, "❌ Капча не пройдена. Заявка отклонена.")
-        await context.bot.decline_chat_join_request(chat_id, user_id)
+        await query.edit_message_text("❌ Капча неверная. Заявка отклонена.")
+
+        try:
+            await context.bot.decline_chat_join_request(chat_id, user_id)
+        except:
+            pass
 
     del pending_captcha[user_id]
 
-# ================== ЗАПУСК ==================
+# ================== RUN ==================
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
