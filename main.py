@@ -1,10 +1,7 @@
-import random
 import os
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+import random
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,6 +11,9 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN не задан в переменных окружения")
 
 # 🔐 ID администраторов бота
 ADMIN_IDS = {7996717371, 8561438704}
@@ -176,4 +176,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
