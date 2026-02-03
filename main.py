@@ -1,37 +1,33 @@
 import os
 import random
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
-    ChatJoinRequestHandler
+    ChatJoinRequestHandler,
 )
 
+# ================== НАСТРОЙКИ ==================
+
 TOKEN = os.getenv("BOT_TOKEN")
-
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN не задан в переменных окружения")
+    raise RuntimeError("BOT_TOKEN не задан")
 
-# 🔐 ID администраторов бота
 ADMIN_IDS = {7996717371, 8561438704}
 
-# 🧠 Хранилища
-pending_captcha = {}      # user_id -> {chat_id, fruit}
-admin_notifications = {}  # admin_id -> True/False
-
-# 🍎 База фруктов (название -> эмоджи)
 FRUITS = {
     "Ябл0ко": "🍎",
     "БAHAH": "🍌",
     "ГPуWа": "🍐",
-    "Апе/\ьсин": "🍊",
+    "Апе/льсин": "🍊",
     "BиHоград": "🍇",
     "Apбуз": "🍉",
 }
 
+pending_captcha = {}      # user_id -> {chat_id, fruit}
+admin_notifications = {}  # admin_id -> bool
 
 # ================== АДМИН ПАНЕЛЬ ==================
 
@@ -40,7 +36,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id in ADMIN_IDS:
         state = admin_notifications.get(user_id, True)
-        text = "🔧 Панель администратора"
 
         keyboard = [[
             InlineKeyboardButton(
@@ -50,12 +45,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]]
 
         await update.message.reply_text(
-            text,
+            "🔧 Панель администратора",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         await update.message.reply_text("Привет.")
-
 
 async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -67,7 +61,6 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current = admin_notifications.get(admin_id, True)
     admin_notifications[admin_id] = not current
-
     state = admin_notifications[admin_id]
 
     keyboard = [[
@@ -81,45 +74,36 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
-# ================== ЗАЯВКА В ЧАТ ==================
+# ================== ЗАЯВКА ==================
 
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req = update.chat_join_request
     user = req.from_user
     chat_id = req.chat.id
 
-    fruit, emoji = random.choice(list(FRUITS.items()))
+    fruit = random.choice(list(FRUITS.keys()))
 
-    # Генерация кнопок
-    buttons = list(FRUITS.values())
-    random.shuffle(buttons)
-
+    # Кнопки со ВСЕМИ фруктами
     keyboard = [
-        [InlineKeyboardButton(e, callback_data=f"captcha_{e}")]
-        for e in buttons[:4]
+        [InlineKeyboardButton(emoji, callback_data=f"captcha:{name}")]
+        for name, emoji in FRUITS.items()
     ]
 
-    # Сохраняем капчу
     pending_captcha[user.id] = {
         "chat_id": chat_id,
-        "fruit": fruit,
-        "emoji": emoji
+        "fruit": fruit
     }
 
     try:
         await context.bot.send_message(
             user.id,
-            f"🛡 Проверка: нажми на эмоджи фрукта **{fruit}**",
-            parse_mode="Markdown",
+            f"🛡 Проверка: нажми на эмоджи фрукта {fruit}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except:
-        # Если бот не может написать в ЛС — отклоняем
         await req.decline()
 
-
-# ================== ПРОВЕРКА КАПЧИ ==================
+# ================== КАПЧА ==================
 
 async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -131,34 +115,28 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = pending_captcha[user_id]
-    correct_emoji = data["emoji"]
+    correct_fruit = data["fruit"]
     chat_id = data["chat_id"]
 
-    chosen = query.data.replace("captcha_", "")
+    chosen_fruit = query.data.split(":")[1]
 
-    if chosen == correct_emoji:
-        # ✅ ПРОЙДЕНО
+    if chosen_fruit == correct_fruit:
         await query.edit_message_text("✅ Капча пройдена. Ожидайте решения администраторов.")
 
-        # Уведомления админам
         for admin in ADMIN_IDS:
             if admin_notifications.get(admin, True):
                 try:
                     await context.bot.send_message(
                         admin,
-                        f"🟢 Пользователь {query.from_user.full_name} прошел капчу."
+                        f"🟢 {query.from_user.full_name} прошел капчу."
                     )
                 except:
                     pass
-
     else:
-        # ❌ НЕ ПРОЙДЕНО
         await context.bot.send_message(user_id, "❌ Капча не пройдена. Заявка отклонена.")
-
         await context.bot.decline_chat_join_request(chat_id, user_id)
 
     del pending_captcha[user_id]
-
 
 # ================== ЗАПУСК ==================
 
@@ -166,15 +144,12 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(toggle_notify, pattern="toggle_notify"))
-    app.add_handler(CallbackQueryHandler(captcha_answer, pattern="captcha_"))
+    app.add_handler(CallbackQueryHandler(toggle_notify, pattern=r"^toggle_notify$"))
+    app.add_handler(CallbackQueryHandler(captcha_answer, pattern=r"^captcha:"))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
 
-    print("Bot started...")
+    print("Bot started")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
-
-
