@@ -69,18 +69,29 @@ async def toggle_isolation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     isolation_mode = not isolation_mode
 
-    # Меняем права во всех чатах, где бот видел заявки
-    chats = {v["chat_id"] for v in pending_captcha.values()}
+    perms = ChatPermissions(
+        can_send_messages=not isolation_mode,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False
+    )
 
-    perms = ChatPermissions(can_send_messages=not isolation_mode)
-
-    for chat_id in chats:
+    for chat_id in known_chats:
         try:
             await context.bot.set_chat_permissions(chat_id, perms)
-        except:
-            pass
+        except Exception as e:
+            print("Permissions error:", e)
 
-    await query.edit_message_text("🔧 Панель администратора", reply_markup=admin_keyboard(query.from_user.id))
+    await query.edit_message_text(
+        "🔧 Панель администратора",
+        reply_markup=admin_keyboard(query.from_user.id)
+    )
 
 # ================= JOIN REQUEST =================
 
@@ -162,3 +173,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
