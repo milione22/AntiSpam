@@ -271,11 +271,135 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Не удалось замутить пользователя: {e}")
 
 # ================= RUN =================
+async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    if not context.args and not update.message.reply_to_message:
+        await update.message.reply_text("❌ Укажите срок мутa и пользователя или ответьте на сообщение.")
+        return
+
+    # Определяем срок
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        time_arg = context.args[0] if context.args else None
+    else:
+        time_arg = context.args[0]
+        arg = context.args[1] if len(context.args) > 1 else None
+        target_user = None
+
+        # По username или ID
+        if arg:
+            if arg.startswith("@"):
+                username = arg[1:]
+                try:
+                    member = await context.bot.get_chat_member(update.effective_chat.id, username)
+                    target_user = member.user
+                except:
+                    pass
+            else:
+                try:
+                    user_id = int(arg)
+                    member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                    target_user = member.user
+                except:
+                    pass
+
+    if not target_user or not time_arg:
+        await update.message.reply_text("❌ Не удалось найти пользователя или указать срок.")
+        return
+
+    match = re.fullmatch(r"(\d+)([dh])", time_arg)
+    if not match:
+        await update.message.reply_text("❌ Неверный формат времени. Пример: 5d или 2h")
+        return
+
+    amount, unit = match.groups()
+    amount = int(amount)
+    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
+    until_date = datetime.utcnow() + delta
+
+    perms = ChatPermissions(
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False
+    )
+
+    try:
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            target_user.id,
+            permissions=perms,
+            until_date=until_date
+        )
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} замучен до {until_date} UTC.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось замутить пользователя: {e}")
+
+# ================= UNMUTE =================
+async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    target_user = None
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+    elif context.args:
+        arg = context.args[0]
+        try:
+            user_id = int(arg)
+            member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+            target_user = member.user
+        except:
+            try:
+                username = arg.lstrip("@")
+                member = await context.bot.get_chat_member(update.effective_chat.id, username)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    perms = ChatPermissions(
+        can_send_messages=True,
+        can_send_audios=True,
+        can_send_documents=True,
+        can_send_photos=True,
+        can_send_videos=True,
+        can_send_video_notes=True,
+        can_send_voice_notes=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True
+    )
+
+    try:
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            target_user.id,
+            permissions=perms
+        )
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} размучен.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось размутить пользователя: {e}")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("unmute", unmute))
     app.add_handler(CallbackQueryHandler(toggle_notify, pattern="^toggle_notify$"))
     app.add_handler(CallbackQueryHandler(toggle_isolation, pattern="^toggle_isolation$"))
     app.add_handler(CallbackQueryHandler(captcha_answer, pattern="^captcha:"))
