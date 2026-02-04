@@ -459,12 +459,12 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Не удалось замутить пользователя: {e}")
 
 # ================= RUN =================
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("unmute", unmute))
-	app.add_handler(CommandHandler("tmute", tmute))
-	app.add_handler(MessageHandler(filters.ALL, shadow_message_handler))  # для теневого мута
+    app.add_handler(CommandHandler("tmute", tmute))
+    app.add_handler(MessageHandler(filters.ALL, shadow_message_handler))  # для теневого мута
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(toggle_notify, pattern="^toggle_notify$"))
@@ -477,6 +477,7 @@ def main():
 
     print("Bot started")
     app.run_polling()
-
+	
 if __name__ == "__main__":
     main()
+
