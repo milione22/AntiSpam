@@ -1,7 +1,6 @@
 import os
 import random
 import time
-import asyncio
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -167,15 +166,15 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del pending_captcha[user_id]
 
 # ================= CAPTCHA WATCHER =================
-async def captcha_watcher_loop(app):
+async def captcha_watcher_loop(application):
     while True:
         now = time.time()
         expired = []
         for user_id, data in pending_captcha.items():
             if now > data["deadline"]:
                 try:
-                    await app.bot.decline_chat_join_request(data["chat_id"], user_id)
-                    await app.bot.send_message(user_id, "⏰ Время на капчу истекло. Заявка отклонена.")
+                    await application.bot.decline_chat_join_request(data["chat_id"], user_id)
+                    await application.bot.send_message(user_id, "⏰ Время на капчу истекло. Заявка отклонена.")
                 except:
                     pass
                 expired.append(user_id)
@@ -197,18 +196,19 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await captcha_answer(update, context)
 
 # ================= RUN =================
-def main():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
 
-    # Запуск фонового таймера капчи через asyncio
-    asyncio.create_task(captcha_watcher_loop(app))
+    # Запуск фонового таймера капчи через PTB loop
+    app.create_task(captcha_watcher_loop(app))
 
     print("Bot started")
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
