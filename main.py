@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import json
 from datetime import datetime, timedelta
 from telegram import (
     Update,
@@ -36,6 +37,23 @@ FRUITS = {
 pending_captcha = {}
 admin_notifications = {}
 ISOLATION_MODE = False  # Глобальный режим изоляции
+shadow_mutes_file = "shadow_mutes.json"
+if os.path.exists(shadow_mutes_file):
+    with open(shadow_mutes_file, "r", encoding="utf-8") as f:
+        shadow_mutes = json.load(f)
+        # Преобразуем строки времени обратно в datetime
+        for k, v in shadow_mutes.items():
+            shadow_mutes[k] = datetime.fromisoformat(v)
+else:
+    shadow_mutes = {}
+
+def save_shadow_mutes():
+    with open(shadow_mutes_file, "w", encoding="utf-8") as f:
+        json.dump({k: v.isoformat() for k, v in shadow_mutes.items()}, f, ensure_ascii=False)
+        
+        
+
+
 known_chats = set()  # сюда добавляем ID чатов, где бот админ
 
 # ================= UI =================
@@ -62,6 +80,134 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = query.from_user.id
     admin_notifications[admin_id] = not admin_notifications.get(admin_id, True)
     await query.edit_message_text("🔧 Панель администратора", reply_markup=admin_keyboard(admin_id))
+    
+    
+async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    target_user = None
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+    elif context.args:
+        arg = context.args[0]
+        if arg.startswith("@"):
+            username = arg[1:]
+            try:
+                chat = await context.bot.get_chat(update.effective_chat.id)
+                async for member in chat.get_members():
+                    if member.user.username == username:
+                        target_user = member.user
+                        break
+            except:
+                pass
+        else:
+            try:
+                user_id = int(arg)
+                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    perms = ChatPermissions(
+        can_send_messages=True,
+        can_send_audios=True,
+        can_send_documents=True,
+        can_send_photos=True,
+        can_send_videos=True,
+        can_send_video_notes=True,
+        can_send_voice_notes=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True
+    )
+
+    try:
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            target_user.id,
+            permissions=perms
+        )
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} размучен.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось размутить пользователя: {e}")
+        
+async def tmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Укажите срок и пользователя.")
+        return
+
+    # Определяем срок и пользователя
+    if update.message.reply_to_message:
+        time_arg = context.args[0]
+        target_user = update.message.reply_to_message.from_user
+    else:
+        if len(context.args) < 2:
+            await update.message.reply_text("❌ Неверный синтаксис. Пример: /tmute 2d @username")
+            return
+        time_arg = context.args[0]
+        arg = context.args[1]
+        target_user = None
+        if arg.startswith("@"):
+            username = arg[1:]
+            try:
+                chat = await context.bot.get_chat(update.effective_chat.id)
+                async for member in chat.get_members():
+                    if member.user.username == username:
+                        target_user = member.user
+                        break
+            except:
+                pass
+        else:
+            try:
+                user_id = int(arg)
+                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    match = re.fullmatch(r"(\d+)([dh])", time_arg)
+    if not match:
+        await update.message.reply_text("❌ Неверный формат времени. Пример: 5d или 2h")
+        return
+
+    amount, unit = match.groups()
+    amount = int(amount)
+    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
+    until = datetime.utcnow() + delta
+
+    # Сохраняем в теневой мут
+    shadow_mutes[str(target_user.id)] = until
+    save_shadow_mutes()
+
+    await update.message.reply_text(f"🕵️‍♂️ Пользователь {target_user.full_name} теперь в теневом муте до {until} UTC.")
+    
+    
+async def shadow_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if user_id in shadow_mutes:
+        if datetime.utcnow() < shadow_mutes[user_id]:
+            try:
+                await update.message.delete()
+            except:
+                pass
+        else:
+            # срок закончился
+            del shadow_mutes[user_id]
+            save_shadow_mutes()
 
 # ================= ИЗОЛЯЦИЯ =================
 
@@ -199,6 +345,48 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= MUTE =================
 
+
+# ================= TUNMUTE =================
+async def tunmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    target_user = None
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+    elif context.args:
+        arg = context.args[0]
+        if arg.startswith("@"):
+            username = arg[1:]
+            try:
+                chat = await context.bot.get_chat(update.effective_chat.id)
+                async for member in chat.get_members():
+                    if member.user.username == username:
+                        target_user = member.user
+                        break
+            except:
+                pass
+        else:
+            try:
+                user_id = int(arg)
+                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    user_id = str(target_user.id)
+    if user_id in shadow_mutes:
+        del shadow_mutes[user_id]
+        save_shadow_mutes()
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} снят с теневого мута.")
+    else:
+        await update.message.reply_text("❌ Пользователь не был в теневом муте.")
+
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("❌ У вас нет прав для этой команды.")
@@ -274,6 +462,9 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("unmute", unmute))
+	app.add_handler(CommandHandler("tmute", tmute))
+	app.add_handler(MessageHandler(filters.ALL, shadow_message_handler))  # для теневого мута
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(toggle_notify, pattern="^toggle_notify$"))
@@ -282,6 +473,7 @@ def main():
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
     app.add_handler(CommandHandler("ban", ban))
     app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("tunmute", tunmute))
 
     print("Bot started")
     app.run_polling()
