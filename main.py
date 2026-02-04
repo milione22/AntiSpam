@@ -1,5 +1,7 @@
 import os
 import random
+import time
+import asyncio
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -29,23 +31,21 @@ FRUITS = {
     "Apбуз": "🍉",
 }
 
-pending_captcha = {}
+pending_captcha = {}  # user_id -> {chat_id, fruit, deadline}
 admin_notifications = {}
 isolation_mode = False
+known_chats = set()
 
 # ================= UI =================
-
 def admin_keyboard(admin_id):
     notify = admin_notifications.get(admin_id, True)
     iso = "ВКЛ" if isolation_mode else "ВЫКЛ"
-
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"🔔 Уведомления: {'ВКЛ' if notify else 'ВЫКЛ'}", callback_data="toggle_notify")],
         [InlineKeyboardButton(f"🚨 Изоляция: {iso}", callback_data="toggle_isolation")]
     ])
 
 # ================= АДМИН ПАНЕЛЬ =================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in ADMIN_IDS:
         await update.message.reply_text("🔧 Панель администратора", reply_markup=admin_keyboard(update.effective_user.id))
@@ -56,17 +56,14 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     admin_id = query.from_user.id
-
     admin_notifications[admin_id] = not admin_notifications.get(admin_id, True)
     await query.edit_message_text("🔧 Панель администратора", reply_markup=admin_keyboard(admin_id))
 
 # ================= ИЗОЛЯЦИЯ =================
-
 async def toggle_isolation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global isolation_mode
     query = update.callback_query
     await query.answer()
-
     isolation_mode = not isolation_mode
 
     perms = ChatPermissions(
@@ -88,25 +85,21 @@ async def toggle_isolation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print("Permissions error:", e)
 
-    await query.edit_message_text(
-        "🔧 Панель администратора",
-        reply_markup=admin_keyboard(query.from_user.id)
-    )
+    await query.edit_message_text("🔧 Панель администратора", reply_markup=admin_keyboard(query.from_user.id))
 
 # ================= JOIN REQUEST =================
-
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     req = update.chat_join_request
     user = req.from_user
+    known_chats.add(req.chat.id)
 
     if isolation_mode:
         await req.decline()
         return
 
     fruit = random.choice(list(FRUITS.keys()))
-
-    # 2 колонки
     items = list(FRUITS.items())
+
     keyboard = []
     for i in range(0, len(items), 2):
         row = []
@@ -114,15 +107,22 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
             row.append(InlineKeyboardButton(emoji, callback_data=f"captcha:{name}"))
         keyboard.append(row)
 
-    pending_captcha[user.id] = {"chat_id": req.chat.id, "fruit": fruit}
+    pending_captcha[user.id] = {
+        "chat_id": req.chat.id,
+        "fruit": fruit,
+        "deadline": time.time() + 60  # 60 секунд на капчу
+    }
 
     try:
-        await context.bot.send_message(user.id, f"🛡 Проверка: нажми на эмоджи фрукта {fruit}", reply_markup=InlineKeyboardMarkup(keyboard))
+        await context.bot.send_message(
+            user.id,
+            f"🛡 Проверка: нажми на эмоджи фрукта {fruit}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     except:
         await req.decline()
 
 # ================= CAPTCHA =================
-
 async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -134,14 +134,23 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = pending_captcha[user_id]
+
+    # Проверка таймаута
+    if time.time() > data["deadline"]:
+        await query.edit_message_text("⏰ Время на капчу истекло. Заявка отклонена.")
+        try:
+            await context.bot.decline_chat_join_request(data["chat_id"], user_id)
+        except:
+            pass
+        del pending_captcha[user_id]
+        return
+
     chosen = query.data.split(":")[1]
 
     if chosen == data["fruit"]:
         await query.edit_message_text("✅ Капча пройдена. Ожидайте решения администраторов.")
-
         username = f"@{user.username}" if user.username else "без username"
         text = f"🟢 ПРОЙДЕНА КАПЧА\nИмя: {user.full_name}\nUsername: {username}\nID: {user.id}"
-
         for admin in ADMIN_IDS:
             if admin_notifications.get(admin, True):
                 try:
@@ -157,20 +166,49 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     del pending_captcha[user_id]
 
-# ================= RUN =================
+# ================= CAPTCHA WATCHER =================
+async def captcha_watcher_loop(app):
+    while True:
+        now = time.time()
+        expired = []
+        for user_id, data in pending_captcha.items():
+            if now > data["deadline"]:
+                try:
+                    await app.bot.decline_chat_join_request(data["chat_id"], user_id)
+                    await app.bot.send_message(user_id, "⏰ Время на капчу истекло. Заявка отклонена.")
+                except:
+                    pass
+                expired.append(user_id)
+        for uid in expired:
+            del pending_captcha[uid]
+        await asyncio.sleep(5)
 
+# ================= CALLBACK ROUTER =================
+async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "toggle_notify":
+        await toggle_notify(update, context)
+    elif data == "toggle_isolation":
+        await toggle_isolation(update, context)
+    elif data.startswith("captcha:"):
+        await captcha_answer(update, context)
+
+# ================= RUN =================
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(toggle_notify, pattern="^toggle_notify$"))
-    app.add_handler(CallbackQueryHandler(toggle_isolation, pattern="^toggle_isolation$"))
-    app.add_handler(CallbackQueryHandler(captcha_answer, pattern="^captcha:"))
+    app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
+
+    # Запуск фонового таймера капчи через asyncio
+    asyncio.create_task(captcha_watcher_loop(app))
 
     print("Bot started")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
