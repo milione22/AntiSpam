@@ -1,7 +1,7 @@
-
-
 import os
 import random
+import re
+from datetime import datetime, timedelta
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -14,6 +14,8 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler,
     ChatJoinRequestHandler,
+    MessageHandler,
+    filters
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -33,14 +35,14 @@ FRUITS = {
 
 pending_captcha = {}
 admin_notifications = {}
-isolation_mode = False
+ISOLATION_MODE = False  # Глобальный режим изоляции
+known_chats = set()  # сюда добавляем ID чатов, где бот админ
 
 # ================= UI =================
 
 def admin_keyboard(admin_id):
     notify = admin_notifications.get(admin_id, True)
-    iso = "ВКЛ" if isolation_mode else "ВЫКЛ"
-
+    iso = "ВКЛ" if ISOLATION_MODE else "ВЫКЛ"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"🔔 Уведомления: {'ВКЛ' if notify else 'ВЫКЛ'}", callback_data="toggle_notify")],
         [InlineKeyboardButton(f"🚨 Изоляция: {iso}", callback_data="toggle_isolation")]
@@ -58,21 +60,20 @@ async def toggle_notify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     admin_id = query.from_user.id
-
     admin_notifications[admin_id] = not admin_notifications.get(admin_id, True)
     await query.edit_message_text("🔧 Панель администратора", reply_markup=admin_keyboard(admin_id))
 
 # ================= ИЗОЛЯЦИЯ =================
 
 async def toggle_isolation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global isolation_mode
+    global ISOLATION_MODE
     query = update.callback_query
     await query.answer()
 
-    isolation_mode = not isolation_mode
+    ISOLATION_MODE = not ISOLATION_MODE
 
     perms = ChatPermissions(
-        can_send_messages=not isolation_mode,
+        can_send_messages=not ISOLATION_MODE,
         can_send_audios=False,
         can_send_documents=False,
         can_send_photos=False,
@@ -101,13 +102,13 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     req = update.chat_join_request
     user = req.from_user
 
-    if isolation_mode:
+    if ISOLATION_MODE:
+        # при изоляции заявки можно отклонять автоматически или оставлять для проверки админам
         await req.decline()
         return
 
     fruit = random.choice(list(FRUITS.keys()))
 
-    # 2 колонки
     items = list(FRUITS.items())
     keyboard = []
     for i in range(0, len(items), 2):
@@ -128,7 +129,6 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user = query.from_user
     user_id = user.id
 
@@ -140,10 +140,8 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chosen == data["fruit"]:
         await query.edit_message_text("✅ Капча пройдена. Ожидайте решения администраторов.")
-
         username = f"@{user.username}" if user.username else "без username"
         text = f"🟢 ПРОЙДЕНА КАПЧА\nИмя: {user.full_name}\nUsername: {username}\nID: {user.id}"
-
         for admin in ADMIN_IDS:
             if admin_notifications.get(admin, True):
                 try:
@@ -159,6 +157,119 @@ async def captcha_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     del pending_captcha[user_id]
 
+# ================= BAN =================
+
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    target_user = None
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+    elif context.args:
+        arg = context.args[0]
+        if arg.startswith("@"):
+            username = arg[1:]
+            try:
+                chat = await context.bot.get_chat(update.effective_chat.id)
+                async for member in chat.get_members():
+                    if member.user.username == username:
+                        target_user = member.user
+                        break
+            except:
+                pass
+        else:
+            try:
+                user_id = int(arg)
+                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, target_user.id)
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} заблокирован.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось заблокировать пользователя: {e}")
+
+# ================= MUTE =================
+
+async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ У вас нет прав для этой команды.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Укажите срок мутa и пользователя.")
+        return
+
+    time_arg = context.args[0]
+    match = re.fullmatch(r"(\d+)([dh])", time_arg)
+    if not match:
+        await update.message.reply_text("❌ Неверный формат времени. Пример: 5d или 2h")
+        return
+
+    amount, unit = match.groups()
+    amount = int(amount)
+    delta = timedelta(days=amount) if unit == "d" else timedelta(hours=amount)
+    until_date = datetime.utcnow() + delta
+
+    target_user = None
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+    elif len(context.args) > 1:
+        arg = context.args[1]
+        if arg.startswith("@"):
+            username = arg[1:]
+            try:
+                chat = await context.bot.get_chat(update.effective_chat.id)
+                async for member in chat.get_members():
+                    if member.user.username == username:
+                        target_user = member.user
+                        break
+            except:
+                pass
+        else:
+            try:
+                user_id = int(arg)
+                member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
+                target_user = member.user
+            except:
+                pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Не удалось найти пользователя.")
+        return
+
+    perms = ChatPermissions(
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False
+    )
+
+    try:
+        await context.bot.restrict_chat_member(
+            update.effective_chat.id,
+            target_user.id,
+            permissions=perms,
+            until_date=until_date
+        )
+        await update.message.reply_text(f"✅ Пользователь {target_user.full_name} замучен до {until_date} UTC.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось замутить пользователя: {e}")
+
 # ================= RUN =================
 
 def main():
@@ -169,6 +280,8 @@ def main():
     app.add_handler(CallbackQueryHandler(toggle_isolation, pattern="^toggle_isolation$"))
     app.add_handler(CallbackQueryHandler(captcha_answer, pattern="^captcha:"))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CommandHandler("mute", mute))
 
     print("Bot started")
     app.run_polling()
